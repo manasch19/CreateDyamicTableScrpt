@@ -1,0 +1,124 @@
+import groovy.sql.Sql
+import java.util.Properties;
+import java.io.InputStream;
+import java.io.BufferedReader;
+import com.boomi.execution.ExecutionUtil;
+import java.nio.file.*
+import java.nio.charset.StandardCharsets;
+import java.io.BufferedWriter
+import java.io.File
+import java.io.FileReader
+import java.io.FileWriter
+
+logger = ExecutionUtil.getBaseLogger();
+
+logger.info("----------INSIDE LOADING CSV TO CSVTABLES into IR GROOVY SCRIPT--------");	
+// Define the database connection parameters
+//def url = 'jdbc:postgresql://apmconnectvm4.meridium.com:5432/RELEASE_500_ASHISH'
+
+
+String database=ExecutionUtil.getDynamicProcessProperty("IR_DATABASE");
+String port =ExecutionUtil.getDynamicProcessProperty("IR_PORT");
+String host=ExecutionUtil.getDynamicProcessProperty("IR_HOST");
+def user = ExecutionUtil.getDynamicProcessProperty("IR_USERID")
+def password = ExecutionUtil.getDynamicProcessProperty("IR_PASSWORD")
+
+String url="jdbc:postgresql://"+host+":"+port+"/"+database;
+
+//define delimeters
+def delimiter = '\u000B'
+
+def sql = Sql.newInstance(url, user, password)
+
+// Define the file path and vertical tab delimiter
+
+String IR_TALEND_OUTPUT =ExecutionUtil.getDynamicProcessProperty("IR_TALEND_OUTPUT");
+String INTERFACE=ExecutionUtil.getDynamicProcessProperty("INTERFACE");
+String CMMS_ID=ExecutionUtil.getDynamicProcessProperty("CMMS_ID");
+String BATCH_NAME = ExecutionUtil.getDynamicProcessProperty("BATCH_NAME");
+String folderPath=IR_TALEND_OUTPUT.replaceAll("/","\\") +"\\"+CMMS_ID+ "\\"+INTERFACE+"\\"+BATCH_NAME+"\\";
+String filepath="";
+
+logger.info("----------VARIABLES DATA--------");
+logger.info("BATCH NAME : ${BATCH_NAME}  " );
+logger.info("CMMSID ;    ${CMMS_ID}  " );
+logger.info("----------BEFORE RESULT--------");	    
+
+def result = sql.rows("""
+    SELECT distinct filename,table_name
+    FROM autoloader_control
+    WHERE batch_name = '${BATCH_NAME}' AND active=1 AND cmms_id = '${CMMS_ID}'
+""")
+
+logger.info("result  : " +result);
+result.each {
+    
+logger.info("----------INSIDE EACH RESULT OF AUTOLOADER CONTROL TABLE --------");	    
+//	  logger.info("${it.filename}  " );
+	 logger.info("filename  : " +it.filename);
+	 
+def filename=it.filename
+def tableName=it.table_name
+
+String Generated_sql="";
+
+	filepath=folderPath+filename;
+		
+	logger.info("filename : "+filename);
+	logger.info("filepath : "+filepath);
+def file = new File(filepath)
+def reader = new BufferedReader(new FileReader(file,StandardCharsets.UTF_8))	
+	
+logger.info("tableName : "+tableName);
+
+// Dynamically create the table
+def fileContents = new File(filepath).text
+def firstRow = fileContents.split('\n')[0]
+def columns = firstRow.replaceAll("\\|", "_").split(delimiter)
+
+String InsertColumnList="";
+
+
+logger.info("firstRow : "+firstRow);
+logger.info("columns : "+columns);
+logger.info("tableName : "+tableName);
+
+ Generated_sql="DROP TABLE IF EXISTS \""+tableName+"\"";
+	sql.execute(Generated_sql);
+	
+	logger.info("tableName : "+tableName);
+	logger.info("Drop table Generated Sql : "+Generated_sql);
+
+String DDL_START_SQL = "Create table " + "\"" + tableName + "\"" + " (";
+			String DDL_END_SQL = ")";
+			String columnList = "";
+
+			for (int column_no = 0; column_no < columns.size(); column_no++) {
+
+				if (column_no == columns.size() - 1) {
+					columnList = columnList + "\"" + columns[column_no].trim() + "\"" + " varchar ";
+					InsertColumnList = InsertColumnList + "\"" + columns[column_no] + "\"";
+				} else {
+
+					columnList = columnList + "\"" + columns[column_no].trim() + "\"" + " varchar ,";
+					InsertColumnList = InsertColumnList + "\"" + columns[column_no] + "\"" + ",";
+				}
+
+			}
+
+			Generated_sql = DDL_START_SQL + columnList + DDL_END_SQL;
+			
+				logger.info("CREATE  table Generated Sql : "+Generated_sql);
+			
+			
+			sql.execute(Generated_sql);
+			
+
+	String copy_csvfile_to_table="COPY \""+ tableName+ "\" FROM '"+filepath+"'  WITH (FORMAT csv, DELIMITER E'"+delimiter+"', HEADER true, NULL '\\N',QUOTE E'\u0007',ENCODING 'UTF8')";
+
+	logger.info(" COPY statement  : "+copy_csvfile_to_table);
+		sql.execute(copy_csvfile_to_table);
+		
+
+}
+sql.close()
